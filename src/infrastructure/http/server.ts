@@ -62,6 +62,7 @@ export function buildServer() {
   if (origins.length === 0) {
     // fallback dev
     origins.push(
+      'https://admin.sobradinhoporks.com.br',
       'http://localhost:3000',
       'http://localhost:5173',
       'http://127.0.0.1:4000'

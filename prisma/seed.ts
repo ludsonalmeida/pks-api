@@ -12,9 +12,9 @@ function slugify(s: string) {
 }
 
 async function seedAdmin() {
-  const name = process.env.ADMIN_NAME || 'Admin Mané';
-  const email = process.env.ADMIN_EMAIL || 'admin@mane.com.vc';
-  const rawPassword = process.env.ADMIN_PASSWORD || 'troque-esta-senha';
+  const name = process.env.ADMIN_NAME || 'Admin Porks';
+  const email = process.env.ADMIN_EMAIL || 'admin@sobradinhoporks.com.br';
+  const rawPassword = process.env.ADMIN_PASSWORD || 'farofa';
   const roleEnv = (process.env.ADMIN_ROLE || 'ADMIN').toUpperCase();
   const role = (['ADMIN', 'STAFF'].includes(roleEnv) ? roleEnv : 'ADMIN') as Role;
 
