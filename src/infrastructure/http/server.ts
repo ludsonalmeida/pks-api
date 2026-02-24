@@ -24,7 +24,11 @@ import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
 import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
-import { blocksRouter } from './routes/blocks.routes'; // <--- NOVO
+import { blocksRouter } from './routes/blocks.routes';
+import { auditRouter } from './routes/audit.routes';
+import { apiKeyAuth } from './middlewares/apiKeyAuth';
+import { requireAuth } from './middlewares/requireAuth'; // 🔥 IMPORTA AQUI
+
 /* ========= Helpers de CORS ========= */
 function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
@@ -44,7 +48,11 @@ function parseOriginsCSV(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try { return new RegExp(v.slice(1, -1)); } catch { /* ignore */ }
+        try {
+          return new RegExp(v.slice(1, -1));
+        } catch {
+          /* ignore */
+        }
       }
       return normalizeOrigin(v);
     });
@@ -62,7 +70,6 @@ export function buildServer() {
   if (origins.length === 0) {
     // fallback dev
     origins.push(
-      'https://admin.sobradinhoporks.com.br',
       'http://localhost:3000',
       'http://localhost:5173',
       'http://127.0.0.1:4000'
@@ -179,7 +186,9 @@ export function buildServer() {
   app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
 
   // Health
-  app.get('/', (_req, res) => res.json({ ok: true, service: 'api', ts: new Date().toISOString() }));
+  app.get('/', (_req, res) =>
+    res.json({ ok: true, service: 'api', ts: new Date().toISOString() })
+  );
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
   // Header p/ QR (embed cross-origin)
@@ -190,11 +199,20 @@ export function buildServer() {
   });
 
   /* ========= Rotas ========= */
-  // públicas
+  // públicas (sem token)
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
-  app.use('/v1/blocks', blocksRouter); // <--- NOVO
+  app.use('/v1/blocks', blocksRouter); // continua público
+
+  // 🔑 Rotas para integrações externas (token fixo via x-api-key)
+  app.use('/v1/integrations/reservations', apiKeyAuth, reservationsPublicRouter);
+  app.use('/v1/integrations/areas', apiKeyAuth, areasPublicRouter);
+  app.use('/v1/integrations/units', apiKeyAuth, unitsPublicRouter);
+
+   // 🔑 Admin via token (lista TODAS as reservas, mesmo router do painel)
+  app.use('/v1/integrations/admin/reservations', requireAuth, reservationsRouter);
+
   // auth
   app.use('/v1/auth', authRoutes);
 
@@ -205,6 +223,7 @@ export function buildServer() {
   app.use('/v1/areas', areasUploadRouter); // upload de foto de área
   app.use('/v1/units', unitsRouter);
   app.use('/v1/users', usersRouter);
+  app.use('/v1/audit', auditRouter); // logs de auditoria
 
   // Swagger
   const openapiPath = path.resolve(__dirname, '..', '..', '..', 'openapi.json');

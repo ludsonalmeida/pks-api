@@ -12,9 +12,9 @@ function slugify(s: string) {
 }
 
 async function seedAdmin() {
-  const name = process.env.ADMIN_NAME || 'Admin Porks';
-  const email = process.env.ADMIN_EMAIL || 'admin@sobradinhoporks.com.br';
-  const rawPassword = process.env.ADMIN_PASSWORD || 'farofa';
+  const name = process.env.ADMIN_NAME || 'Admin Mané';
+  const email = process.env.ADMIN_EMAIL || 'admin@mane.com.vc';
+  const rawPassword = process.env.ADMIN_PASSWORD || 'troque-esta-senha';
   const roleEnv = (process.env.ADMIN_ROLE || 'ADMIN').toUpperCase();
   const role = (['ADMIN', 'STAFF'].includes(roleEnv) ? roleEnv : 'ADMIN') as Role;
 
@@ -26,9 +26,9 @@ async function seedAdmin() {
 
   const passwordHash = await argon2.hash(rawPassword, {
     type: argon2.argon2id,
-    memoryCost: 2 ** 16,
+    memoryCost: 65536,
     timeCost: 3,
-    parallelism: 1,
+    parallelism: 4,
   });
 
   const user = await prisma.user.create({

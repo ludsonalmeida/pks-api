@@ -31,6 +31,7 @@ const reservationSchema = z.object({
   kids: z.number().int().nonnegative().optional(),
   unit: z.string(),
   table: z.string().optional(),
+  tables: z.string().optional(),
   reservationDate: z.string(), // ISO
   notes: z.string().optional(),
   checkinUrl: z.string().url(),
@@ -94,7 +95,7 @@ function buildHtml(
           <tr><td style="padding:8px 0;color:#334155;"><strong>Data e hora:</strong></td><td style="padding:8px 0;">${dateFmt}</td></tr>
           <tr><td style="padding:8px 0;color:#334155;"><strong>Pessoas:</strong></td><td style="padding:8px 0;">${ticket.people}</td></tr>
           ${ticket.kids && ticket.kids > 0 ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Crianças:</strong></td><td style="padding:8px 0;">${ticket.kids}</td></tr>` : ``}
-          ${ticket.table ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Mesa:</strong></td><td style="padding:8px 0;">${ticket.table}</td></tr>` : ``}
+          ${(() => { const t = (ticket as any).tables ?? (ticket as any).table; return t ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Mesa(s):</strong></td><td style="padding:8px 0;">${t}</td></tr>` : ``; })()}
           ${ticket.phone ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Telefone:</strong></td><td style="padding:8px 0;">${phoneFmt}</td></tr>` : ``}
           ${ticket.notes ? `<tr><td style="padding:8px 0;vertical-align:top;color:#334155;"><strong>Observações:</strong></td><td style="padding:8px 0;">${ticket.notes}</td></tr>` : ``}
         </table>
@@ -169,13 +170,23 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     codeTxt
   );
 
+  const tablesRaw = (ticket as any).tables ?? (ticket as any).table ?? '';
+  const tablesLabel = String(tablesRaw || '').trim()
+    ? String(tablesRaw)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => (s.length === 1 || s.length === 2 || s.length === 3) ? s.padStart(3, '0') : s)
+        .join(', ')
+    : '';
+
   const text = [
     `Sua reserva foi confirmada — ${toTitle(ticket.unit)}`,
     `Código: ${codeTxt}`,
     `Data/hora: ${new Date(ticket.reservationDate).toLocaleString('pt-BR')}`,
     `Pessoas: ${ticket.people}`,
     ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : '',
-    ticket.table ? `Mesa: ${ticket.table}` : '',
+    tablesLabel ? `Mesa(s): ${tablesLabel}` : '',
     ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : '',
     ticket.notes ? `Obs: ${ticket.notes}` : '',
     `Consultar: ${consultUrl}`,

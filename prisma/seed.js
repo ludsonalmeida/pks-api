@@ -14,9 +14,9 @@ function slugify(s) {
         .toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 }
 async function seedAdmin() {
-    const name = process.env.ADMIN_NAME || 'Admin Sobradinho';
-    const email = process.env.ADMIN_EMAIL || 'admin@sobradinhoporks.com.br';
-    const rawPassword = process.env.ADMIN_PASSWORD || 'farofa';
+    const name = process.env.ADMIN_NAME || 'Admin Mané';
+    const email = process.env.ADMIN_EMAIL || 'admin@mane.com.vc';
+    const rawPassword = process.env.ADMIN_PASSWORD || 'troque-esta-senha';
     const roleEnv = (process.env.ADMIN_ROLE || 'ADMIN').toUpperCase();
     const role = (['ADMIN', 'STAFF'].includes(roleEnv) ? roleEnv : 'ADMIN');
     const existing = await prisma.user.findUnique({ where: { email } });

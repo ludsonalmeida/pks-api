@@ -19,6 +19,9 @@ import { requireAuth, requireRole } from '../middlewares/requireAuth';
 // ⬇️ disponibilidade de áreas
 import { areasService } from '../../../modules/areas/areas.service';
 
+// ⬇️ audit log
+import { logFromRequest } from '../../../services/audit/auditLog.service';
+
 export const reservationsRouter = Router();
 
 /* =========================================================================
@@ -154,6 +157,16 @@ async function enrichAndValidate(req: any, res: any, next: any) {
   try {
     const body = req.body || {};
 
+    // ✅ Overbooking / retroativas
+    // - Retroativas: liberado automaticamente para ADMIN
+    // - Overbooking em qualquer data: se enviar adminOverride=true (agora disponível para qualquer usuário)
+    const role = req.user?.role;
+    const isAdmin = role === 'ADMIN';
+    const adminOverrideFlag =
+      (body.adminOverride === true ||
+        body.admin_override === true ||
+        String(body.adminOverride || body.admin_override || '').toLowerCase() === 'true');
+
     // normaliza números
     const people = Number(body.people ?? 0);
     const kids = Number(body.kids ?? 0);
@@ -162,6 +175,7 @@ async function enrichAndValidate(req: any, res: any, next: any) {
 
     // data obrigatória para validação de capacidade quando houver área
     const reservationDate: Date | null = body.reservationDate ? new Date(body.reservationDate) : null;
+    const isRetroactive = !!reservationDate && reservationDate.getTime() < Date.now();
 
     // resolve unidade
     const { unitId, unitName } = await resolveUnit({ unitId: body.unitId, unit: body.unit });
@@ -177,7 +191,11 @@ async function enrichAndValidate(req: any, res: any, next: any) {
     if (!body.area && areaName) body.area = areaName;
 
     // valida capacidade se tivermos área + data
-    if (areaId && reservationDate) {
+    // 🔓 Libera capacidade quando:
+    // - ADMIN e retroativa, OU
+    // - adminOverride=true (qualquer usuário)
+    const shouldSkipCapacityValidation = (isAdmin && isRetroactive) || adminOverrideFlag;
+    if (areaId && reservationDate && !shouldSkipCapacityValidation) {
       const ymd = toYMD(reservationDate);
       const hhmm = toHHmm(reservationDate); // valida por período
 
@@ -229,6 +247,65 @@ async function enrichAndValidate(req: any, res: any, next: any) {
       }
     }
 
+    // ✅ Se pulamos a validação (overbooking/retroativa), ainda calculamos a situação
+    // para conseguirmos avisar no retorno se houve overbooking de fato.
+    if (areaId && reservationDate && shouldSkipCapacityValidation) {
+      try {
+        const ymd = toYMD(reservationDate);
+        const hhmm = toHHmm(reservationDate);
+        const list = await areasService.listByUnitPublic(String(unitId), ymd, hhmm);
+        const found = list.find((a: any) => a.id === areaId);
+        if (found) {
+          const totalNovo = Number(body.people) + Number(body.kids || 0);
+          const available = Number(found.available ?? found.remaining ?? 0);
+
+          let creditoAtual = 0;
+          const isUpdate = req.method === 'PUT' && req.params?.id;
+          if (isUpdate) {
+            const prev = await prisma.reservation.findUnique({ where: { id: String(req.params.id) } });
+            if (prev) {
+              const sameArea = String(prev.areaId || '') === String(areaId || '');
+              const sameUnit = String(prev.unitId || '') === String(unitId || '');
+              const sameDay = toYMD(prev.reservationDate) === ymd;
+              const samePeriod = toHHmm(prev.reservationDate) === hhmm;
+              if (sameUnit && sameArea && sameDay && samePeriod) {
+                creditoAtual = Number(prev.people || 0) + Number(prev.kids || 0);
+              }
+            }
+          }
+
+          const limit = available + creditoAtual;
+          if (totalNovo > limit) {
+            (req as any).overbookingMeta = {
+              enabled: true,
+              limit,
+              requested: totalNovo,
+              exceededBy: totalNovo - limit,
+              areaId,
+              unitId,
+              day: ymd,
+              period: hhmm,
+              reason: isRetroactive ? 'RETROACTIVE' : 'OVERRIDE',
+            };
+          } else {
+            (req as any).overbookingMeta = {
+              enabled: false,
+              limit,
+              requested: totalNovo,
+              exceededBy: 0,
+              areaId,
+              unitId,
+              day: ymd,
+              period: hhmm,
+              reason: isRetroactive ? 'RETROACTIVE' : 'OVERRIDE',
+            };
+          }
+        }
+      } catch {
+        // se falhar o cálculo, seguimos sem meta
+      }
+    }
+
     req.body = body;
     next();
   } catch (e: any) {
@@ -249,6 +326,9 @@ function sanitizeStaffBody(req: any, _res: any, next: any) {
       delete req.body.source;
       delete req.body.utmSource;
       delete req.body.utmCampaign;
+
+      // Overbooking agora pode ser solicitado por qualquer usuário via adminOverride.
+      // (Regra de retroativa automática permanece somente para ADMIN, aplicada no validator.)
     }
   }
   next();
@@ -557,6 +637,9 @@ reservationsRouter.post(
         },
       });
 
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'CHECKIN', 'Reservation', id, { status: r.status }, { status: updated.status });
+
       return res.json(updated);
     } catch (err) {
       next(err);
@@ -603,6 +686,83 @@ reservationsRouter.post(
           reservationDate: true,
         },
       });
+
+      return res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* =========================================================================
+   ❌ Marcar como NO_SHOW (cliente não compareceu)
+   ========================================================================= */
+reservationsRouter.post(
+  '/:id/noshow',
+  requireAuth,
+  requireRole(['STAFF', 'ADMIN']),
+  async (req: any, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const r = await prisma.reservation.findUnique({ where: { id } });
+      if (!r) return res.status(404).json({ error: 'Reserva não encontrada.' });
+
+      const oldStatus = r.status;
+
+      // Já está como NO_SHOW? Permite "desmarcar" voltando para AWAITING_CHECKIN
+      if (r.status === 'NO_SHOW') {
+        const updated = await prisma.reservation.update({
+          where: { id },
+          data: {
+            status: 'AWAITING_CHECKIN',
+          },
+          select: {
+            id: true,
+            reservationCode: true,
+            status: true,
+            checkedInAt: true,
+            fullName: true,
+            phone: true,
+            people: true,
+            kids: true,
+            unitId: true,
+            areaId: true,
+            reservationDate: true,
+          },
+        });
+        // 📋 Log de auditoria
+        await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
+        return res.json(updated);
+      }
+
+      // Não permite marcar NO_SHOW se já fez check-in
+      if (r.status === 'CHECKED_IN') {
+        return res.status(409).json({ error: 'Reserva já fez check-in, não pode ser marcada como No Show.' });
+      }
+
+      const updated = await prisma.reservation.update({
+        where: { id },
+        data: {
+          status: 'NO_SHOW',
+        },
+        select: {
+          id: true,
+          reservationCode: true,
+          status: true,
+          checkedInAt: true,
+          fullName: true,
+          phone: true,
+          people: true,
+          kids: true,
+          unitId: true,
+          areaId: true,
+          reservationDate: true,
+        },
+      });
+
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
 
       return res.json(updated);
     } catch (err) {
